@@ -719,4 +719,4 @@ jobs:
         run: |
           gh release create "v${{ github.run_number }}" VolumeMelayang.apk \
             --title "Volume Melayang v${{ github.run_number }}" \
-            --notes "Unduh VolumeMelayang.apk lalu pasang di HP."           
+            --notes "Unduh VolumeMelayang.apk lalu pasang di HP."
