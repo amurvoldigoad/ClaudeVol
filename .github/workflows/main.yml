@@ -1,0 +1,634 @@
+name: Bangun APK Volume Melayang
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Tulis proyek Android
+        run: |
+          set -e
+          mkdir -p app/src/main/java/com/volumemelayang/app app/src/main/res/drawable
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "VolumeMelayang"
+          include ':app'
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.nonTransitiveRClass=true
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.volumemelayang.app'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId 'com.volumemelayang.app'
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+          }
+
+          tasks.withType(JavaCompile).configureEach {
+              options.encoding = 'UTF-8'
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+              <application
+                  android:label="Volume Melayang"
+                  android:icon="@drawable/ic_launcher"
+                  android:allowBackup="false"
+                  android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".FloatService"
+                      android:exported="false"
+                      android:foregroundServiceType="specialUse">
+                      <property
+                          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                          android:value="floating_volume_controls" />
+                  </service>
+
+                  <receiver
+                      android:name=".BootReceiver"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.BOOT_COMPLETED" />
+                      </intent-filter>
+                  </receiver>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/res/drawable/ic_launcher.xml <<'EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#1A73E8"
+                  android:pathData="M0,0h108v108h-108z" />
+              <path
+                  android:fillColor="#FFFFFF"
+                  android:pathData="M30,44h14l18,-14v48l-18,-14h-14z" />
+              <path
+                  android:fillColor="#FFFFFF"
+                  android:pathData="M70,40c6,6 6,22 0,28l-4,-4c4,-5 4,-15 0,-20z" />
+          </vector>
+          EOF
+
+          cat > app/src/main/java/com/volumemelayang/app/BootReceiver.java <<'EOF'
+          package com.volumemelayang.app;
+
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.provider.Settings;
+
+          public class BootReceiver extends BroadcastReceiver {
+              @Override
+              public void onReceive(Context c, Intent i) {
+                  SharedPreferences p = c.getSharedPreferences("vm", Context.MODE_PRIVATE);
+                  if (p.getBoolean("aktif", false) && Settings.canDrawOverlays(c)) {
+                      try {
+                          c.startForegroundService(new Intent(c, FloatService.class));
+                      } catch (Exception ignored) {
+                      }
+                  }
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/volumemelayang/app/MainActivity.java <<'EOF'
+          package com.volumemelayang.app;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.provider.Settings;
+          import android.view.View;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          public class MainActivity extends Activity {
+              private TextView status;
+              private SharedPreferences prefs;
+
+              private int dp(int v) {
+                  return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
+              }
+
+              @Override
+              protected void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  prefs = getSharedPreferences("vm", MODE_PRIVATE);
+
+                  if (Build.VERSION.SDK_INT >= 33) {
+                      requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1);
+                  }
+
+                  LinearLayout col = new LinearLayout(this);
+                  col.setOrientation(LinearLayout.VERTICAL);
+                  col.setPadding(dp(20), dp(56), dp(20), dp(24));
+
+                  TextView title = new TextView(this);
+                  title.setText("Volume Melayang");
+                  title.setTextSize(26);
+                  col.addView(title);
+
+                  TextView info = new TextView(this);
+                  info.setText("Pengganti tombol volume yang rusak. Tanpa iklan dan tanpa akses internet.\n\n"
+                          + "1) Beri izin tampil di atas aplikasi lain.\n"
+                          + "2) Aktifkan tombol melayang.\n\n"
+                          + "Ketuk tombol bulat untuk membuka panel. Geser tombol bulat atau angka di panel "
+                          + "untuk memindahkannya. Tahan tombol + atau - untuk mengubah dengan cepat.");
+                  info.setPadding(0, dp(12), 0, dp(12));
+                  col.addView(info);
+
+                  status = new TextView(this);
+                  status.setPadding(0, 0, 0, dp(12));
+                  col.addView(status);
+
+                  addButton(col, "1. Izin tampil di atas aplikasi lain", v ->
+                          startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                  Uri.parse("package:" + getPackageName()))));
+                  addButton(col, "2. Aktifkan tombol melayang", v -> start());
+                  addButton(col, "Matikan tombol melayang", v -> stop());
+                  addButton(col, "Izin Jangan Ganggu (opsional, untuk dering)", v ->
+                          startActivity(new Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)));
+
+                  ScrollView sv = new ScrollView(this);
+                  sv.addView(col);
+                  setContentView(sv);
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  updateStatus();
+              }
+
+              private void addButton(LinearLayout parent, String text, View.OnClickListener l) {
+                  Button b = new Button(this);
+                  b.setText(text);
+                  b.setAllCaps(false);
+                  b.setOnClickListener(l);
+                  parent.addView(b);
+              }
+
+              private void updateStatus() {
+                  boolean izin = Settings.canDrawOverlays(this);
+                  boolean aktif = prefs.getBoolean("aktif", false);
+                  status.setText("Izin tampil di atas aplikasi lain: " + (izin ? "sudah" : "belum")
+                          + "\nTombol melayang: " + (aktif ? "aktif" : "mati"));
+              }
+
+              private void start() {
+                  if (!Settings.canDrawOverlays(this)) {
+                      Toast.makeText(this, "Beri izin tampil di atas aplikasi lain dulu (tombol 1)",
+                              Toast.LENGTH_LONG).show();
+                      return;
+                  }
+                  prefs.edit().putBoolean("aktif", true).apply();
+                  startForegroundService(new Intent(this, FloatService.class));
+                  Toast.makeText(this, "Tombol melayang aktif", Toast.LENGTH_SHORT).show();
+                  updateStatus();
+              }
+
+              private void stop() {
+                  prefs.edit().putBoolean("aktif", false).apply();
+                  stopService(new Intent(this, FloatService.class));
+                  updateStatus();
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/volumemelayang/app/FloatService.java <<'EOF'
+          package com.volumemelayang.app;
+
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.app.Service;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.content.pm.ServiceInfo;
+          import android.graphics.Color;
+          import android.graphics.PixelFormat;
+          import android.graphics.drawable.GradientDrawable;
+          import android.graphics.drawable.Icon;
+          import android.media.AudioManager;
+          import android.os.Build;
+          import android.os.Handler;
+          import android.os.IBinder;
+          import android.os.Looper;
+          import android.provider.Settings;
+          import android.view.Gravity;
+          import android.view.MotionEvent;
+          import android.view.View;
+          import android.view.WindowManager;
+          import android.widget.FrameLayout;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          public class FloatService extends Service {
+              static final String CHANNEL = "volume_melayang";
+              static final String ACTION_STOP = "com.volumemelayang.app.STOP";
+
+              private final int[] streams = {
+                      AudioManager.STREAM_MUSIC, AudioManager.STREAM_RING, AudioManager.STREAM_ALARM};
+              private final String[] names = {"Media", "Dering", "Alarm"};
+              private final TextView[] chips = new TextView[3];
+              private final Handler handler = new Handler(Looper.getMainLooper());
+
+              private WindowManager wm;
+              private AudioManager am;
+              private SharedPreferences prefs;
+              private FrameLayout root;
+              private WindowManager.LayoutParams lp;
+              private View bubble;
+              private View panel;
+              private TextView levelText;
+              private int stream = AudioManager.STREAM_MUSIC;
+
+              @Override
+              public void onCreate() {
+                  super.onCreate();
+                  prefs = getSharedPreferences("vm", MODE_PRIVATE);
+                  stream = prefs.getInt("stream", AudioManager.STREAM_MUSIC);
+                  am = (AudioManager) getSystemService(AUDIO_SERVICE);
+                  wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+                  startAsForeground();
+                  if (!Settings.canDrawOverlays(this)) {
+                      stopSelf();
+                      return;
+                  }
+                  buildUi();
+              }
+
+              @Override
+              public int onStartCommand(Intent intent, int flags, int startId) {
+                  if (intent != null && ACTION_STOP.equals(intent.getAction())) {
+                      prefs.edit().putBoolean("aktif", false).apply();
+                      stopSelf();
+                      return START_NOT_STICKY;
+                  }
+                  return START_STICKY;
+              }
+
+              @Override
+              public void onDestroy() {
+                  handler.removeCallbacksAndMessages(null);
+                  if (root != null && root.isAttachedToWindow()) {
+                      wm.removeView(root);
+                  }
+                  super.onDestroy();
+              }
+
+              @Override
+              public IBinder onBind(Intent intent) {
+                  return null;
+              }
+
+              private void startAsForeground() {
+                  NotificationManager nm = getSystemService(NotificationManager.class);
+                  nm.createNotificationChannel(new NotificationChannel(
+                          CHANNEL, "Volume Melayang", NotificationManager.IMPORTANCE_MIN));
+
+                  PendingIntent open = PendingIntent.getActivity(
+                          this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
+                  Intent stop = new Intent(this, FloatService.class).setAction(ACTION_STOP);
+                  PendingIntent stopPi = PendingIntent.getService(
+                          this, 1, stop, PendingIntent.FLAG_IMMUTABLE);
+
+                  Notification n = new Notification.Builder(this, CHANNEL)
+                          .setSmallIcon(android.R.drawable.ic_lock_silent_mode_off)
+                          .setContentTitle("Volume Melayang aktif")
+                          .setContentText("Ketuk untuk membuka pengaturan")
+                          .setContentIntent(open)
+                          .addAction(new Notification.Action.Builder(
+                                  Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+                                  "Berhenti", stopPi).build())
+                          .setOngoing(true)
+                          .build();
+
+                  if (Build.VERSION.SDK_INT >= 34) {
+                      startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+                  } else {
+                      startForeground(1, n);
+                  }
+              }
+
+              private int dp(int v) {
+                  return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
+              }
+
+              private GradientDrawable round(int color, int radiusDp) {
+                  GradientDrawable g = new GradientDrawable();
+                  g.setColor(color);
+                  g.setCornerRadius(dp(radiusDp));
+                  return g;
+              }
+
+              private TextView label(String text, int sp, int color) {
+                  TextView t = new TextView(this);
+                  t.setText(text);
+                  t.setTextSize(sp);
+                  t.setTextColor(color);
+                  t.setGravity(Gravity.CENTER);
+                  return t;
+              }
+
+              private TextView bigButton(String text, int dir) {
+                  TextView t = label(text, 30, Color.WHITE);
+                  t.setBackground(round(0xFF3C4043, 16));
+                  LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(64), 1f);
+                  p.leftMargin = dp(4);
+                  p.rightMargin = dp(4);
+                  t.setLayoutParams(p);
+                  bindRepeat(t, dir);
+                  return t;
+              }
+
+              private void buildUi() {
+                  root = new FrameLayout(this);
+
+                  TextView b = label("\uD83D\uDD0A", 22, Color.WHITE);
+                  b.setBackground(round(0xE61A73E8, 26));
+                  b.setLayoutParams(new FrameLayout.LayoutParams(dp(52), dp(52)));
+                  bubble = b;
+                  makeDraggable(bubble, () -> showPanel(true));
+
+                  LinearLayout p = new LinearLayout(this);
+                  p.setOrientation(LinearLayout.VERTICAL);
+                  p.setBackground(round(0xF2202124, 20));
+                  p.setPadding(dp(12), dp(10), dp(12), dp(12));
+                  p.setMinimumWidth(dp(240));
+                  p.setLayoutParams(new FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+                  panel = p;
+
+                  LinearLayout top = new LinearLayout(this);
+                  top.setOrientation(LinearLayout.HORIZONTAL);
+                  top.setGravity(Gravity.CENTER_VERTICAL);
+                  for (int i = 0; i < 3; i++) {
+                      final int idx = i;
+                      TextView c = label(names[i], 13, Color.WHITE);
+                      c.setPadding(dp(10), dp(6), dp(10), dp(6));
+                      c.setOnClickListener(v -> {
+                          stream = streams[idx];
+                          prefs.edit().putInt("stream", stream).apply();
+                          refresh();
+                      });
+                      LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
+                              LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                      cp.rightMargin = dp(4);
+                      top.addView(c, cp);
+                      chips[i] = c;
+                  }
+                  TextView close = label("\u2715", 16, 0xFFBBBBBB);
+                  close.setPadding(dp(10), dp(6), dp(4), dp(6));
+                  close.setOnClickListener(v -> showPanel(false));
+                  top.addView(close);
+                  p.addView(top);
+
+                  levelText = label("", 18, Color.WHITE);
+                  levelText.setPadding(0, dp(8), 0, dp(8));
+                  makeDraggable(levelText, null);
+                  p.addView(levelText);
+
+                  LinearLayout row = new LinearLayout(this);
+                  row.setOrientation(LinearLayout.HORIZONTAL);
+                  row.addView(bigButton("\u2212", AudioManager.ADJUST_LOWER));
+                  row.addView(bigButton("+", AudioManager.ADJUST_RAISE));
+                  p.addView(row);
+
+                  lp = new WindowManager.LayoutParams(
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                          PixelFormat.TRANSLUCENT);
+                  lp.gravity = Gravity.TOP | Gravity.START;
+                  lp.x = prefs.getInt("x", dp(8));
+                  lp.y = prefs.getInt("y", dp(240));
+
+                  showPanel(false);
+                  wm.addView(root, lp);
+              }
+
+              private void showPanel(boolean open) {
+                  root.removeAllViews();
+                  if (open) {
+                      int w = getResources().getDisplayMetrics().widthPixels;
+                      lp.x = Math.max(0, Math.min(lp.x, w - dp(250)));
+                      root.addView(panel);
+                      refresh();
+                  } else {
+                      root.addView(bubble);
+                  }
+                  if (root.isAttachedToWindow()) {
+                      wm.updateViewLayout(root, lp);
+                  }
+              }
+
+              private void refresh() {
+                  int cur = am.getStreamVolume(stream);
+                  int max = am.getStreamMaxVolume(stream);
+                  String name = "";
+                  for (int i = 0; i < 3; i++) {
+                      boolean sel = streams[i] == stream;
+                      chips[i].setBackground(sel ? round(0xFF1A73E8, 14) : null);
+                      chips[i].setTextColor(sel ? Color.WHITE : 0xFFBBBBBB);
+                      if (sel) {
+                          name = names[i];
+                      }
+                  }
+                  levelText.setText(name + "  " + cur + " / " + max);
+              }
+
+              private void change(int dir) {
+                  try {
+                      am.adjustStreamVolume(stream, dir, 0);
+                  } catch (SecurityException e) {
+                      Toast.makeText(this,
+                              "Dering butuh izin Jangan Ganggu. Buka aplikasi Volume Melayang.",
+                              Toast.LENGTH_LONG).show();
+                  }
+                  refresh();
+              }
+
+              private void bindRepeat(final View v, final int dir) {
+                  final Runnable repeat = new Runnable() {
+                      @Override
+                      public void run() {
+                          change(dir);
+                          handler.postDelayed(this, 120);
+                      }
+                  };
+                  v.setOnTouchListener((view, e) -> {
+                      switch (e.getActionMasked()) {
+                          case MotionEvent.ACTION_DOWN:
+                              view.setAlpha(0.6f);
+                              change(dir);
+                              handler.postDelayed(repeat, 450);
+                              break;
+                          case MotionEvent.ACTION_UP:
+                          case MotionEvent.ACTION_CANCEL:
+                              view.setAlpha(1f);
+                              handler.removeCallbacks(repeat);
+                              break;
+                          default:
+                              break;
+                      }
+                      return true;
+                  });
+              }
+
+              private void makeDraggable(View handle, final Runnable onTap) {
+                  handle.setOnTouchListener(new View.OnTouchListener() {
+                      int sx;
+                      int sy;
+                      float tx;
+                      float ty;
+                      boolean moved;
+
+                      @Override
+                      public boolean onTouch(View v, MotionEvent e) {
+                          switch (e.getActionMasked()) {
+                              case MotionEvent.ACTION_DOWN: {
+                                  sx = lp.x;
+                                  sy = lp.y;
+                                  tx = e.getRawX();
+                                  ty = e.getRawY();
+                                  moved = false;
+                                  return true;
+                              }
+                              case MotionEvent.ACTION_MOVE: {
+                                  float dx = e.getRawX() - tx;
+                                  float dy = e.getRawY() - ty;
+                                  if (Math.abs(dx) > dp(6) || Math.abs(dy) > dp(6)) {
+                                      moved = true;
+                                  }
+                                  if (moved) {
+                                      lp.x = Math.max(0, sx + (int) dx);
+                                      lp.y = Math.max(0, sy + (int) dy);
+                                      wm.updateViewLayout(root, lp);
+                                  }
+                                  return true;
+                              }
+                              case MotionEvent.ACTION_UP: {
+                                  if (moved) {
+                                      prefs.edit().putInt("x", lp.x).putInt("y", lp.y).apply();
+                                  } else if (onTap != null) {
+                                      onTap.run();
+                                  }
+                                  return true;
+                              }
+                              default:
+                                  return true;
+                          }
+                      }
+                  });
+              }
+          }
+          EOF
+
+      - name: Bangun APK
+        run: gradle assembleDebug
+
+      - name: Siapkan APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk VolumeMelayang.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VolumeMelayang
+          path: VolumeMelayang.apk
+
+      - name: Terbitkan di Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ github.run_number }}" VolumeMelayang.apk \
+            --title "Volume Melayang v${{ github.run_number }}" \
+            --notes "Unduh VolumeMelayang.apk lalu pasang di HP."
