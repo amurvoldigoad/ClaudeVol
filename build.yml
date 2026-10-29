@@ -292,6 +292,7 @@ jobs:
           import android.content.Intent;
           import android.content.SharedPreferences;
           import android.content.pm.ServiceInfo;
+          import android.content.res.ColorStateList;
           import android.graphics.Color;
           import android.graphics.PixelFormat;
           import android.graphics.drawable.GradientDrawable;
@@ -307,6 +308,7 @@ jobs:
           import android.view.View;
           import android.view.WindowManager;
           import android.widget.FrameLayout;
+          import android.widget.SeekBar;
           import android.widget.LinearLayout;
           import android.widget.TextView;
           import android.widget.Toast;
@@ -329,6 +331,7 @@ jobs:
               private View bubble;
               private View panel;
               private TextView levelText;
+              private SeekBar seek;
               private int stream = AudioManager.STREAM_MUSIC;
 
               @Override
@@ -477,6 +480,39 @@ jobs:
                   makeDraggable(levelText, null);
                   p.addView(levelText);
 
+                  seek = new SeekBar(this);
+                  seek.setProgressTintList(ColorStateList.valueOf(0xFF1A73E8));
+                  seek.setThumbTintList(ColorStateList.valueOf(Color.WHITE));
+                  seek.setProgressBackgroundTintList(ColorStateList.valueOf(0xFF5F6368));
+                  seek.setLayoutParams(new LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT, dp(44)));
+                  seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                      @Override
+                      public void onProgressChanged(SeekBar s, int progress, boolean fromUser) {
+                          if (!fromUser) {
+                              return;
+                          }
+                          try {
+                              am.setStreamVolume(stream, progress, 0);
+                          } catch (SecurityException e) {
+                              Toast.makeText(FloatService.this,
+                                      "Dering butuh izin Jangan Ganggu. Buka aplikasi Volume Melayang.",
+                                      Toast.LENGTH_LONG).show();
+                          }
+                          updateText();
+                      }
+
+                      @Override
+                      public void onStartTrackingTouch(SeekBar s) {
+                      }
+
+                      @Override
+                      public void onStopTrackingTouch(SeekBar s) {
+                          refresh();
+                      }
+                  });
+                  p.addView(seek);
+
                   LinearLayout row = new LinearLayout(this);
                   row.setOrientation(LinearLayout.HORIZONTAL);
                   row.addView(bigButton("\u2212", AudioManager.ADJUST_LOWER));
@@ -524,7 +560,20 @@ jobs:
                           name = names[i];
                       }
                   }
+                  seek.setMax(max);
+                  seek.setProgress(cur);
                   levelText.setText(name + "  " + cur + " / " + max);
+              }
+
+              private void updateText() {
+                  String name = "";
+                  for (int i = 0; i < 3; i++) {
+                      if (streams[i] == stream) {
+                          name = names[i];
+                      }
+                  }
+                  levelText.setText(name + "  " + am.getStreamVolume(stream)
+                          + " / " + am.getStreamMaxVolume(stream));
               }
 
               private void change(int dir) {
@@ -613,6 +662,11 @@ jobs:
               }
           }
           EOF
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: debug-keystore-v1
 
       - name: Bangun APK
         run: gradle assembleDebug
